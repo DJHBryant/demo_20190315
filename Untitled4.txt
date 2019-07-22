@@ -1,0 +1,45 @@
+GlobalContansts.merNo\w*;
+
+
+String splatformid = PlatformMoneymoremore.substring(1);
+			MadaiLoanAccountInfo mlai = (MadaiLoanAccountInfo) commonService.load(MadaiLoanAccountInfo.class, ConvertUtil.getLong(splatformid, -1));
+
+
+
+			MadaiLoanAccountInfo mlai = null;
+			if(StringUtils.isBlank(noAccount)||!"1".equals(noAccount)){
+				if (!"1".equals(withholdtype)) {
+					MadaiLoanRechargeRecord mlrr = (MadaiLoanRechargeRecord)this.commonService.load(MadaiLoanRechargeRecord.class, lrid);
+					md = (MadaiDeposit) commonService.load(MadaiDeposit.class, mlrr.getDepositId());
+					mlai = (MadaiLoanAccountInfo) commonService.load(MadaiLoanAccountInfo.class, ConvertUtil.getLong(mlrr.getPlatformId().substring(1), -1));
+				}
+				MadaiLoanBindInfo mlbi = (MadaiLoanBindInfo) this.commonService.load(MadaiLoanBindInfo.class, ConvertUtil.getLong(mid.substring(1), -1));
+				mbai = (MadaiBaseAccountInfo) commonService.load(MadaiBaseAccountInfo.class, mlbi.getBaseId());
+			}else{
+				LoanRechargeFlow mlrr = (LoanRechargeFlow)this.commonService.load(LoanRechargeFlow.class, lrid);
+				mlai = (MadaiLoanAccountInfo) commonService.load(MadaiLoanAccountInfo.class, ConvertUtil.getLong(mlrr.getPlatformId().substring(1), -1));
+				md = (MadaiDeposit) commonService.load(MadaiDeposit.class, mlrr.getDepositId());
+				mbai=new MadaiBaseAccountInfo();
+				mbai.setRealName(realName);
+				mbai.setCertificationNumber(paperNO);
+			}
+
+
+
+
+
+			if (StringUtils.isBlank(rid)){
+				return ERROR;
+			}
+			rid = AES.getDecrypt(rid);
+			long lrid = ConvertUtil.getLong(rid, -1);
+			if (lrid <= 0){
+				return ERROR;
+			}
+
+			LoanRechargeFlow mlrr = (LoanRechargeFlow) commonService.load(LoanRechargeFlow.class, lrid);
+			PlatformMoneymoremore = mlrr.getPlatformId();
+
+
+			String splatformid = PlatformMoneymoremore.substring(1);
+			MadaiLoanAccountInfo mlai = (MadaiLoanAccountInfo) commonService.load(MadaiLoanAccountInfo.class, ConvertUtil.getLong(splatformid, -1));

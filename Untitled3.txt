@@ -1,0 +1,658 @@
+package com.netgate.util.hxbank;
+
+import com.netgate.util.JsonUtils;
+import com.netgate.util.MD5;
+import net.sf.json.JSONObject;
+import org.apache.commons.codec.binary.Base64;
+import org.apache.commons.lang.ArrayUtils;
+import org.apache.http.HttpEntity;
+import org.apache.http.client.config.RequestConfig;
+import org.apache.http.client.methods.CloseableHttpResponse;
+import org.apache.http.client.methods.HttpPost;
+import org.apache.http.entity.StringEntity;
+import org.apache.http.impl.client.CloseableHttpClient;
+import org.apache.http.impl.client.HttpClients;
+import org.apache.http.util.EntityUtils;
+
+import javax.crypto.BadPaddingException;
+import javax.crypto.Cipher;
+import javax.crypto.IllegalBlockSizeException;
+import javax.crypto.NoSuchPaddingException;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.UnsupportedEncodingException;
+import java.security.*;
+import java.security.spec.EncodedKeySpec;
+import java.security.spec.InvalidKeySpecException;
+import java.security.spec.PKCS8EncodedKeySpec;
+import java.security.spec.X509EncodedKeySpec;
+import java.util.Map;
+
+/**
+ * @author tanghf
+ * @className com.netgate.util.hxbank.HxBankUtil.java
+ * @createTime 2019/7/15 14:31
+ */
+public class HxBankUtil {
+
+    /**
+     * RSA最大加密明文大小
+     */
+    private static final int MAX_ENCRYPT_BLOCK = 117;
+
+    /**
+     * RSA最大解密密文大小
+     */
+    private static final int MAX_DECRYPT_BLOCK = 100;
+
+
+    private ReqMsg reqMsg;
+    private RespMsg respMsg;
+
+
+
+
+    public void sendMsg(String url, Map<String, Object> bodyMap) throws Exception {
+
+        /*// 私钥字符串: 密钥生成参照 RSAUtil.java
+        String privateString = HxBankConstant.privateString;
+        // 私钥
+        PrivateKey privateKey = restorePrivateKey(Base64.decodeBase64(privateString));*/
+
+        // 公钥字符串: 密钥生成参照 RSAUtil.java
+        String publicKeyString = HxBankConstant.publicStr;
+        // 公钥
+        PublicKey publicKey = restorePublicKey(Base64.decodeBase64(publicKeyString));
+
+        //1.拼装ReqMsg报文对象
+        CreateReqMsg(bodyMap);
+        //getResponseMsg(respMsg,publicKey);
+        //getResponseMsg(reqMsg,publicKey);
+        //2.发送HTTP请求
+        System.out.println(url);
+        String response = doPostQueryCmdJson(url, reqMsg.toString());
+        System.out.println(response);
+        //3.解析应答获得RespMsg报文对象
+        JSONObject responseMsgJsonObj = JSONObject.fromObject(response);
+        respMsg = (RespMsg)JSONObject.toBean(responseMsgJsonObj, RespMsg.class);
+        //getResponseMsg(reqMsg,publicKey);
+    }
+
+    /**
+     * 签名
+     *
+     * @param key
+     * @param plainText
+     * @return
+     */
+    public static byte[] RSAEncode(PrivateKey key, byte[] plainText) {
+
+        try {
+            Cipher cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
+            cipher.init(Cipher.ENCRYPT_MODE, key);
+            return cipher.doFinal(plainText);
+        } catch (NoSuchAlgorithmException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        } catch (NoSuchPaddingException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        } catch (InvalidKeyException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        } catch (IllegalBlockSizeException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        } catch (BadPaddingException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        }
+        return null;
+
+    }
+
+    /**
+     *验签
+     *
+     * @param key
+     * @param encodedText
+     * @return
+     */
+    public static String RSADecode(PublicKey key, byte[] encodedText) {
+
+        try {
+            Cipher cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
+            cipher.init(Cipher.DECRYPT_MODE, key);
+            return new String(cipher.doFinal(encodedText));
+        } catch (NoSuchAlgorithmException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        } catch (NoSuchPaddingException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        } catch (InvalidKeyException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        } catch (IllegalBlockSizeException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        } catch (BadPaddingException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        }
+        return null;
+
+    }
+
+    /**
+     * 组装报文
+     * @param reqMsg
+     * @param privateKey
+     * @return
+     */
+    public String getRequestMsg(ReqMsg reqMsg,PrivateKey privateKey,String secret){
+
+        String privateString = HxBankConstant.privateString;
+        if(privateKey==null)
+        {
+            try {
+                privateKey = restorePrivateKey(Base64.decodeBase64(privateString));
+            } catch (Exception e) {
+                // TODO Auto-generated catch block
+                e.printStackTrace();
+            }
+        }
+        // 报文体字符串
+        String bodyStr = reqMsg.getBody();
+        try {
+            if (secret == null){
+                secret = HxBankConstant.appSecret;
+            }
+            // 对报文body数据进行AES加密
+            if(bodyStr == null){
+                bodyStr ="";
+            }
+            bodyStr = AESUtil.encrypt(bodyStr, secret);
+            // 对加密数据进行BASE64编码
+            bodyStr = Base64.encodeBase64String(bodyStr.getBytes(HxBankConstant.charSet));
+            reqMsg.setBody(bodyStr);
+            // 组装待签名报文：body+requestId+requestTime
+            String signData = reqMsg.getMd5Src();
+            // 待签名报文MD5加密
+            signData = MD5(signData);
+            // RSA加密
+            long startTime = System.currentTimeMillis();
+            byte[] encodedText = RSAEncode(privateKey, signData.getBytes("UTF-8"));
+
+            //私钥签名后的数据
+            signData = byteArrayToHexString(encodedText);//报文头前面256位的私钥签名后的结果privateResult
+            System.out.println("签名耗时: " + (System.currentTimeMillis()-startTime));
+            // BASE64编码
+            signData = Base64.encodeBase64String(signData.getBytes(HxBankConstant.charSet));
+            reqMsg.getHeader().setSignData(signData);
+            //return encodeBASE64(signData.getBytes(HxBankConstant.charSet));
+            return reqMsg.toString();
+            // 为报文头参数signData赋值
+            //headerJsonObject.put("signData", signData);
+            // 清空header里的signData
+        }catch (Exception e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        }
+
+        return null;
+    }
+
+    /**解析报文
+     */
+    public String getResponseMsg(ReqMsg reqMsg,PublicKey publicKey) {
+        String publicKeyString = HxBankConstant.publicStr;
+        // 公钥
+        if(publicKey==null)
+        {
+            publicKey = restorePublicKey(Base64.decodeBase64(publicKeyString));
+        }
+        try {
+            // 组装待验证原文：body+requestId+responseId+responseTime+errorCode+errorMsg
+            String originData = reqMsg.getMd5Src();
+            // 组装待验证原文MD5加密
+            originData = MD5(originData);
+            // 获取请求报文头header里的签名数据signData
+            String signData = reqMsg.getHeader().getSignData();
+            // 对signData进行Base64解密
+            signData = new String(Base64.decodeBase64(signData.getBytes(HxBankConstant.charSet)));
+            // RSA验签
+            // 需要自行比对验签解析完的MD5值 跟 组装待验证原文MD5做比对，一致表示验签成功，本案例不做校验
+            String signDataRsaDecode = RSADecode(publicKey, hexStringToByte(signData));
+            if(signDataRsaDecode==null || signData==null || originData==null) {
+                System.out.println("RSA解密失败！！ ");
+                return null;
+            }
+            if(signDataRsaDecode.equals(originData)){
+                System.out.println("验签通过！！ ");
+                return null;
+            }else{
+                System.out.println("验签失败！！ ");
+                return null;
+            }
+            // BASE64解码并AES解密
+//            bodyStr = decodeData(privateKey, bodyStr);
+            // 替换原有body内容
+            //responseMsgJsonObj.put("body", bodyStr);
+        } catch (Exception e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        }
+
+        return null;
+    }
+
+    private void CreateReqMsg(Map<String, Object> bodyMap) throws Exception {
+
+        // 私钥字符串: 密钥生成参照 RSAUtil.java
+        String privateString = HxBankConstant.privateString;
+        // 私钥
+        PrivateKey privateKey = restorePrivateKey(Base64.decodeBase64(privateString));
+
+        if (reqMsg == null){
+            reqMsg = new ReqMsg();
+        }
+        //body数据加密
+        if (bodyMap.isEmpty()){
+            //reqMsg.setBody(encryptBodyRSA(""));
+            //reqMsg.setBody(AESUtil.encrypt("", HxBankConstant.appSecret));
+            //reqMsg.getHeader().setSignData(getRequestMsg(reqMsg,privateKey));
+            getRequestMsg(reqMsg,privateKey,HxBankConstant.appSecret);
+            System.out.println(reqMsg);
+            return;
+        }
+        String bodyStr = JsonUtils.toJSONString(bodyMap);
+    }
+
+    //body加密，AES
+    public String encryptBodyAES(String body){
+        return "";
+    }
+
+    //body解密，AES
+    public String decryptBodyAES(String body){
+        return "";
+    }
+
+    //body加密 RSA
+    public String encryptBodyRSA(String body){
+        try {
+            //1.获得加密密钥-平台公钥
+            PublicKey publicKey = getPublicKey(HxBankConstant.publicStr);
+            //2.获得加密字节
+            byte[] bytes = body.getBytes(HxBankConstant.charSet);
+            //3.实例加密对象
+            Cipher cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
+            //4.初始化模式-加密，密钥
+            cipher.init(Cipher.ENCRYPT_MODE, publicKey);
+            //5.分块加密
+            byte[] resultByte = cipher.doFinal(bytes);
+            return encodeBASE64(resultByte);
+        } catch (IOException e) {
+            e.printStackTrace();
+        } catch (NoSuchAlgorithmException e) {
+            e.printStackTrace();
+        } catch (InvalidKeySpecException e) {
+            e.printStackTrace();
+        } catch (NoSuchPaddingException e) {
+            e.printStackTrace();
+        } catch (InvalidKeyException e) {
+            e.printStackTrace();
+        } catch (BadPaddingException e) {
+            e.printStackTrace();
+        } catch (IllegalBlockSizeException e) {
+            e.printStackTrace();
+        }
+        return "encode error";
+    }
+
+    //body解密 RSA
+    public String decryptBodyRSA(String body){
+        try {
+            //1.对body字符串base64解码
+            byte[] bytesEncrypt = decodeBASE64(body);
+            //2.获得解密密钥-平台私钥
+            PublicKey publicKey = getPublicKey(HxBankConstant.privateString);
+            //3.实例解密对象
+            Cipher cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
+            //4.初始化模式-加密，密钥
+            cipher.init(Cipher.DECRYPT_MODE, publicKey);
+            //5.分块加密
+            byte[] bytesDecrypt = cipher.doFinal(bytesEncrypt);
+            return new String(bytesDecrypt);
+        } catch (IOException e) {
+            e.printStackTrace();
+        } catch (NoSuchAlgorithmException e) {
+            e.printStackTrace();
+        } catch (InvalidKeySpecException e) {
+            e.printStackTrace();
+        } catch (NoSuchPaddingException e) {
+            e.printStackTrace();
+        } catch (InvalidKeyException e) {
+            e.printStackTrace();
+        } catch (BadPaddingException e) {
+            e.printStackTrace();
+        } catch (IllegalBlockSizeException e) {
+            e.printStackTrace();
+        }
+        return "encode error";
+    }
+
+  /*  //签名
+    public String signData(ReqMsg reqMsg){
+        try {
+            //1.组装待签名报文 MD5(加密后的body+requestId+requestTime)
+            String md5 = MD5(reqMsg.getBody() + reqMsg.getHeader().getRequestId() + reqMsg.getHeader().getRequestTime());
+            //2.究竟用什么私钥签名？
+            byte[] bytes = md5.getBytes(HxBankConstant.charSet);
+//            Signature sha1withRSA = Signature.getInstance("SHA1withRSA");
+//            sha1withRSA.initSign(getPrivateKey(HxBankConstant.privateString));
+//            sha1withRSA.update(bytes);
+            long startTime = System.currentTimeMillis();
+            Cipher cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
+            cipher.init(Cipher.ENCRYPT_MODE, getPrivateKey(HxBankConstant.privateString));
+            byte[] encodedText = cipher.doFinal(bytes);
+
+            //私钥签名后的数据
+            String signData = byteArrayToHexString(encodedText);//报文头前面256位的私钥签名后的结果privateResult
+            //System.out.println("签名耗时: " + (System.currentTimeMillis()-startTime));
+            ////System.out.println("signData = " + signData);
+            ////System.out.println("encodeBASE64(signData.getBytes(HxBankConstant.charSet)) = " + encodeBASE64(signData.getBytes(HxBankConstant.charSet)));
+            return encodeBASE64(signData.getBytes(HxBankConstant.charSet));
+        } catch (NoSuchAlgorithmException e) {
+            e.printStackTrace();
+        } catch (UnsupportedEncodingException e) {
+            e.printStackTrace();
+        } catch (IOException e) {
+            e.printStackTrace();
+        } catch (InvalidKeyException e) {
+            e.printStackTrace();
+        } catch (InvalidKeySpecException e) {
+            e.printStackTrace();
+        } catch (NoSuchPaddingException e) {
+            e.printStackTrace();
+        } catch (IllegalBlockSizeException e) {
+            e.printStackTrace();
+        } catch (BadPaddingException e) {
+            e.printStackTrace();
+        }
+        return "sign error";
+    }
+
+    //验签
+    public String RSADecode() {
+
+        try {
+            //1.base64 对 signdata 进行解码
+            byte[] bytesEncrypt = Base64.decodeBase64(respMsg.getHeader().getSignData().getBytes(HxBankConstant.charSet));
+            long startTime = System.currentTimeMillis();
+            //2.使用公钥进行验签，RSA
+            Cipher cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding");
+            cipher.init(Cipher.DECRYPT_MODE, getPublicKey(HxBankConstant.publicStr));
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < bytesEncrypt.length; i += 128)
+            {
+                byte[] doFinal = cipher.doFinal(ArrayUtils.subarray(bytesEncrypt, i, i + 128));
+                sb.append(doFinal);
+            }
+            //3.验签结果与MD5签名比较。相等则验签通过
+            if(sb.equals(new MD5().getMD5Info(respMsg.getMd5Src()))){
+                //System.out.println("验签耗时: " + (System.currentTimeMillis()-startTime));
+                return sb.toString();
+            }else{
+                return "sign error";
+            }
+        } catch (NoSuchAlgorithmException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        } catch (NoSuchPaddingException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        } catch (InvalidKeyException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        } catch (IllegalBlockSizeException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        } catch (BadPaddingException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        } catch (InvalidKeySpecException e) {
+            e.printStackTrace();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        return "sign error";
+    }*/
+
+
+    /**
+     * 公钥，X509EncodedKeySpec 用于构建公钥的规范
+     *
+     * @param keyBytes
+     * @return
+     */
+    public static PublicKey restorePublicKey(byte[] keyBytes) {
+        X509EncodedKeySpec x509EncodedKeySpec = new X509EncodedKeySpec(keyBytes);
+
+        try {
+            KeyFactory factory = KeyFactory.getInstance(HxBankConstant.KEY_ALGORITHM);
+            PublicKey publicKey = factory.generatePublic(x509EncodedKeySpec);
+            return publicKey;
+        } catch (NoSuchAlgorithmException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        } catch (InvalidKeySpecException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        }
+        return null;
+    }
+
+    /**
+     * 私钥，PKCS8EncodedKeySpec 用于构建私钥的规范
+     *
+     * @param keyBytes
+     * @return
+     */
+    public static PrivateKey restorePrivateKey(byte[] keyBytes) {
+
+        PKCS8EncodedKeySpec pkcs8EncodedKeySpec = new PKCS8EncodedKeySpec(
+                keyBytes);
+
+        KeyFactory factory;
+        try {
+            factory = KeyFactory.getInstance(HxBankConstant.KEY_ALGORITHM);
+            PrivateKey privateKey = factory
+                    .generatePrivate(pkcs8EncodedKeySpec);
+            return privateKey;
+        } catch (NoSuchAlgorithmException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        } catch (InvalidKeySpecException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        }
+
+
+        return null;
+    }
+
+
+
+    //获得应用公钥
+    public PublicKey getPublicKey(String publicKeyStr) throws IOException, NoSuchAlgorithmException, InvalidKeySpecException {
+        byte[] bytes = decodeBASE64(publicKeyStr);
+        EncodedKeySpec keySpec = new X509EncodedKeySpec(bytes);
+        KeyFactory rsa = KeyFactory.getInstance("RSA");
+        return rsa.generatePublic(keySpec);
+    }
+
+    //获得应用私钥
+    public PrivateKey getPrivateKey(String privateKeyStr) throws IOException, NoSuchAlgorithmException, InvalidKeySpecException {
+        //1.privateKeyStr 是使用 base64 编码过的数据，需要解码
+        byte[] bytes = decodeBASE64(privateKeyStr);
+        //2.规则编码？
+        EncodedKeySpec keySpec = new PKCS8EncodedKeySpec(bytes);
+        //3.使用密钥工厂 KeyFactory 加载规则
+        KeyFactory rsa = KeyFactory.getInstance("RSA");
+        //4.获得私钥对象
+        PrivateKey privateKey = rsa.generatePrivate(keySpec);
+        return privateKey;
+    }
+
+    //MD5 加密
+    public String MD5(String s) throws NoSuchAlgorithmException {
+        char[] hexDigits = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
+        //1.字符转成字节数组，byte占8位
+        byte[] bytes = s.getBytes();
+        //2.获得 MD5 摘要算法的 MessageDigest 对象
+        MessageDigest mdInst = MessageDigest.getInstance("MD5");
+        //3.更新字节数组
+        mdInst.update(bytes);
+        //4.获得摘要算法值
+        byte[] digest = mdInst.digest();
+        //5.将字节数组转化成十六进制的字符串，Java中用补码表示二进制{正数不变，负数除最高位，其余取反，加一}
+        char[] chars = new char[digest.length * 2];
+        int k = 0;
+        for (int i=0; i<digest.length; i++){
+            byte b = digest[i];
+            chars[k++] = hexDigits[b >>> 4 & 0xf];
+            chars[k++] = hexDigits[b & 0xf];
+        }
+        return new String(chars);
+    }
+
+    public byte[] decodeBASE64(String key){
+        return Base64.decodeBase64(key);
+//        return (new BASE64Decoder()).decodeBuffer(key);
+    }
+
+    public String encodeBASE64(byte[] key){
+        return Base64.encodeBase64String(key);
+//        return (new BASE64Encoder()).encodeBuffer(key);
+    }
+
+    public String doPostQueryCmdJson(String url, String json) throws IOException {
+        //1.创建HttpClient和httpResponse
+        CloseableHttpClient httpClient = HttpClients.createDefault();
+        CloseableHttpResponse httpResponse = null;
+        //2.创建http请求，设置url和entity
+        HttpPost httpPost = new HttpPost(url);
+        // 实体
+        StringEntity entity = new StringEntity(json);
+        entity.setContentEncoding(HxBankConstant.charSet);
+        entity.setContentType("application/json");
+        httpPost.setEntity(entity);
+        // 配置
+        RequestConfig requestConfig = RequestConfig.custom().setSocketTimeout(5000).setConnectTimeout(5000).build();
+        httpPost.setConfig(requestConfig);
+        //3.http请求
+        httpResponse = httpClient.execute(httpPost);
+        //4.解析http返回
+        HttpEntity responseEntity = httpResponse.getEntity();
+        if (responseEntity != null) {
+            String result = EntityUtils.toString(responseEntity);
+            EntityUtils.consume(responseEntity);
+            return result;
+        }
+        return "http error";
+    }
+
+
+    /**
+     * 解析响应报文
+     * @param
+     */
+    public String getResponseMsg(String msg) {
+        String publicKeyString = HxBankConstant.publicStr;
+       /* // 公钥
+        if(publicKey==null)
+        {
+            publicKey = RSAUtil.restorePublicKey(Base64.decodeBase64(publicKeyString));
+        }*/
+        // 返回报文
+        JSONObject responseMsgJsonObj = JSONObject.fromObject(msg);
+        // 报文头Json对象
+        JSONObject headerJsonObject = responseMsgJsonObj.getJSONObject("header");
+        // 报文体字符串
+        String bodyStr = responseMsgJsonObj.getString("body");
+//        try {
+//            // 组装待验证原文：body+responseId+responseTime+errorCode+errorMsg
+//            String originData = bodyStr + headerJsonObject.getString("requestId") + headerJsonObject.getString("responseId");
+//            if(bodyStr == null || "".equals(bodyStr))
+//                originData = headerJsonObject.getString("requestId") + headerJsonObject.getString("responseId");
+//            // 组装待验证原文MD5加密
+//            originData = MD5(originData);
+//            // 获取请求报文头header里的签名数据signData
+//            String signData = headerJsonObject.getString("signData");
+//            // 对signData进行Base64解密
+//            signData = new String(Base64.decodeBase64(signData.getBytes(HxBankConstant.charSet)));
+//            // RSA验签
+//            // 需要自行比对验签解析完的MD5值 跟 组装待验证原文MD5做比对，一致表示验签成功，本案例不做校验
+//            String signDataRsaDecode = RSADecode(respMsg);
+//            if(signDataRsaDecode==null || signData==null || originData==null) {
+//                //System.out.println("RSA解密失败！！ ");
+//                return null;
+//            }
+//            // 对加报文体body密文进行BASE64解码
+//            bodyStr = new String(Base64.decodeBase64(bodyStr.getBytes(HxBankConstant.charSet)));
+//            // AES解密
+//            if(secret==null)
+//                secret = HxBankConstant;
+//            bodyStr = AESUtil.decrypt(bodyStr, secret);
+//            // 替换原有body内容
+//            responseMsgJsonObj.put("body", bodyStr);
+//        } catch (Exception e) {
+//            // TODO Auto-generated catch block
+//            e.printStackTrace();
+//        }
+//        return responseMsgJsonObj.toString();
+        return "";
+    }
+
+    // 将字节数组转换为十六进制字符串
+    public static String byteArrayToHexString(byte[] bytearray) {
+        String strDigest = "";
+        for (int i = 0; i < bytearray.length; i++)
+        {
+            strDigest += MD5.byteHEX(bytearray[i]);
+        }
+        return strDigest;
+    }
+
+    // 将字节转换为十六进制字符串
+    @Deprecated
+    private static String byteToHexString(byte ib) {
+        char[] Digit = { '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A',
+                'B', 'C', 'D', 'E', 'F' };
+        char[] ob = new char[2];
+        ob[0] = Digit[(ib >>> 4) & 0X0F];
+        ob[1] = Digit[ib & 0X0F];
+        String s = new String(ob);
+        return s;
+    }
+
+    //16进制字符串转为字节数组
+    public static byte[] hexStringToByte(String hex){
+        int len = (hex.length()/2);
+        byte[] result = new byte[len];
+        char[] achar=hex.toCharArray();
+        for(int i=0;i<len;i++){
+            int pos=i*2;
+            result[i]=(byte)(toByte(achar[pos])<<4|toByte(achar[pos+1]));
+        }
+        return result;
+    }
+
+    public static int toByte(char c){
+        byte b=(byte)"0123456789ABCDEF".indexOf(c);
+        return b;
+    }
+
+}
