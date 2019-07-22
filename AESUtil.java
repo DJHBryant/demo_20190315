@@ -20,6 +20,7 @@ public class AESUtil {
 	 * 默认的加密算法
 	 */
 	private static final String DEFAULT_CIPHER_ALGORITHM = "AES/ECB/PKCS5Padding";
+	private static final String DEFAULT_CIPHER_ALGORITHM1 = "AES/ECB/PKCS5Padding";
 	/**
 	 * 字符编码
 	 */
